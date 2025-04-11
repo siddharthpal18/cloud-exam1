@@ -1,0 +1,287 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Pal Final Test - ECS Fargate Flask App with CI/CD, ALB, Autoscaling
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: siddharthpal18
+  GitHubRepo:
+    Type: String
+    Default: cloud-exam1
+  GitHubBranch:
+    Type: String
+    Default: main
+  GitHubToken:
+    Type: String
+    NoEcho: true
+
+Resources:
+  PalVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: pal-vpc
+
+  PalInternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  PalAttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref PalVPC
+      InternetGatewayId: !Ref PalInternetGateway
+
+  PalEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  PalNATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt PalEIP.AllocationId
+      SubnetId: !Ref PalPublicSubnet1
+
+  PalPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PalVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: pal-public-1
+
+  PalPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PalVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: pal-public-2
+
+  PalPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PalVPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: pal-private-1
+
+  PalPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PalVPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: pal-private-2
+
+  PalPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PalVPC
+
+  PalPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: PalAttachGateway
+    Properties:
+      RouteTableId: !Ref PalPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref PalInternetGateway
+
+  PalSubnet1RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PalPublicSubnet1
+      RouteTableId: !Ref PalPublicRouteTable
+
+  PalSubnet2RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PalPublicSubnet2
+      RouteTableId: !Ref PalPublicRouteTable
+
+  PalPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PalVPC
+
+  PalPrivateRoute:
+    Type: AWS::EC2::Route
+    DependsOn: PalNATGateway
+    Properties:
+      RouteTableId: !Ref PalPrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref PalNATGateway
+
+  PalPrivateSubnet1RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PalPrivateSubnet1
+      RouteTableId: !Ref PalPrivateRouteTable
+
+  PalPrivateSubnet2RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PalPrivateSubnet2
+      RouteTableId: !Ref PalPrivateRouteTable
+
+  PalECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: pal-final-cluster
+
+  PalALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic
+      VpcId: !Ref PalVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  PalECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic from ALB
+      VpcId: !Ref PalVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          SourceSecurityGroupId: !Ref PalALBSecurityGroup
+
+  PalTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 5000
+      Protocol: HTTP
+      VpcId: !Ref PalVPC
+      TargetType: ip
+      HealthCheckPath: /
+
+  PalLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !Ref PalPublicSubnet1
+        - !Ref PalPublicSubnet2
+      SecurityGroups:
+        - !Ref PalALBSecurityGroup
+      Scheme: internet-facing
+      Type: application
+
+  PalListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref PalLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref PalTargetGroup
+
+  PalTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  PalTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: pal-task
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt PalTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: pal-container
+          Image: 285951302175.dkr.ecr.us-east-2.amazonaws.com/pal-ecr:latest
+          PortMappings:
+            - ContainerPort: 5000
+
+  PalECSService:
+    Type: AWS::ECS::Service
+    DependsOn: PalListener
+    Properties:
+      Cluster: !Ref PalECSCluster
+      LaunchType: FARGATE
+      DesiredCount: 2
+      TaskDefinition: !Ref PalTaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref PalECSSecurityGroup
+          Subnets:
+            - !Ref PalPrivateSubnet1
+            - !Ref PalPrivateSubnet2
+      LoadBalancers:
+        - ContainerName: pal-container
+          ContainerPort: 5000
+          TargetGroupArn: !Ref PalTargetGroup
+
+  ECSAutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
+
+  ECSServiceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 5
+      MinCapacity: 2
+      ResourceId: !Sub service/${PalECSCluster}/${PalECSService}
+      RoleARN: !GetAtt ECSAutoScalingRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  ECSServiceScalePolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: pal-scale-policy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ECSServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 90
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleOutCooldown: 120
+        ScaleInCooldown: 300
+
+Outputs:
+  ALBDNS:
+    Description: Application Load Balancer DNS
+    Value: !GetAtt PalLoadBalancer.DNSName

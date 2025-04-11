@@ -1,0 +1,7 @@
+[
+    {
+      "name": "pal-container",
+      "imageUri": "285951302175.dkr.ecr.us-east-2.amazonaws.com/pal-ecr:latest"
+    }
+  ]
+  
